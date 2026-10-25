@@ -53,7 +53,11 @@ def main() -> None:
                         help="KDD feature JSONL rows or packet-summary JSONL to aggregate")
     parser.add_argument("--idle-timeout", type=float, default=5.0,
                         help="Seconds before a packet flow is emitted (packets mode)")
+    parser.add_argument("--queue-size", type=int, default=1024,
+                        help="Maximum buffered input lines before stdin is backpressured")
     args = parser.parse_args()
+    if args.queue_size < 1:
+        parser.error("--queue-size must be positive")
     bundle = joblib.load(args.model)
     response_adapter = RecommendationAdapter()
     flow_adapter = PacketFlowFeatureAdapter(args.idle_timeout) if args.input_format == "packets" else None
@@ -63,7 +67,8 @@ def main() -> None:
         result = response_adapter.dispatch(event.get("event_id"), action)
         print(json.dumps(result), flush=True)
 
-    lines: queue.Queue[str | None] = queue.Queue()
+    # A bounded queue applies backpressure to stdin when inference falls behind.
+    lines: queue.Queue[str | None] = queue.Queue(maxsize=args.queue_size)
 
     def read_lines() -> None:
         for input_line in sys.stdin:

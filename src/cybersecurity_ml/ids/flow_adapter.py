@@ -21,7 +21,10 @@ SERVICE_BY_PORT = {
 
 def _timestamp(value: Any) -> float:
     if isinstance(value, (int, float)):
-        return float(value)
+        result = float(value)
+        if not result == result or abs(result) == float("inf"):
+            raise ValueError("timestamp must be finite")
+        return result
     if isinstance(value, str):
         try:
             return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
@@ -82,8 +85,22 @@ class PacketFlowFeatureAdapter:
         now = _timestamp(packet["timestamp"])
         completed = self._expire(now)
         src_ip, dst_ip = str(packet["src_ip"]), str(packet["dst_ip"])
-        src_port, dst_port = int(packet["src_port"]), int(packet["dst_port"])
+        try:
+            src_port, dst_port = int(packet["src_port"]), int(packet["dst_port"])
+            size = int(packet["packet_length"])
+            payload = int(packet.get("payload_length", size))
+            wrong_fragment = int(packet.get("wrong_fragment", 0))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("ports and packet lengths must be integers") from exc
+        if not 0 <= src_port <= 65535 or not 0 <= dst_port <= 65535:
+            raise ValueError("ports must be between 0 and 65535")
+        if size < 0 or payload < 0 or payload > size:
+            raise ValueError("lengths must satisfy 0 <= payload_length <= packet_length")
+        if wrong_fragment < 0:
+            raise ValueError("wrong_fragment must be non-negative")
         protocol = str(packet["protocol"]).lower()
+        if protocol not in {"tcp", "udp", "icmp"}:
+            raise ValueError("protocol must be tcp, udp, or icmp")
         endpoints = sorted(((src_ip, src_port), (dst_ip, dst_port)))
         key = (protocol, *endpoints)
         flow = self.flows.get(key)
@@ -95,8 +112,6 @@ class PacketFlowFeatureAdapter:
         flow.last_seen = now
         flow.last_activity = time.monotonic()
         flow.packets += 1
-        size = int(packet["packet_length"])
-        payload = int(packet.get("payload_length", size))
         if src_ip == flow.src_ip and src_port == flow.src_port:
             flow.src_bytes += payload
         else:
@@ -104,7 +119,7 @@ class PacketFlowFeatureAdapter:
         packet_flags = _flags(packet.get("tcp_flags"))
         flow.flags.update(packet_flags)
         flow.urgent += int("URG" in packet_flags or "U" in packet_flags)
-        flow.wrong_fragment += int(packet.get("wrong_fragment", 0))
+        flow.wrong_fragment += wrong_fragment
         return completed
 
     def _to_features(self, flow: _Flow) -> dict:
@@ -112,7 +127,10 @@ class PacketFlowFeatureAdapter:
         if protocol_name == "icmp":
             service = "eco_i"
         else:
-            service = SERVICE_BY_PORT.get(flow.dst_port, "private")
+            # The first event may be a server response. Resolve a known service
+            # on either endpoint instead of assuming it is always the dst port.
+            service = (SERVICE_BY_PORT.get(flow.dst_port)
+                       or SERVICE_BY_PORT.get(flow.src_port) or "private")
         if "R" in flow.flags:
             flag = "REJ"
         elif "S" in flow.flags and "A" not in flow.flags:

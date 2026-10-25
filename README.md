@@ -47,23 +47,23 @@ Keep datasets in a local `data/` directory. Download the NSL-KDD `KDDTrain+` and
 
 ### Supervised baseline
 
-`ids-train` fits a class-balanced Random Forest. Preprocessing is fit on training records, unknown test categories are supported, and the attack threshold is selected on a validation split from the training file. The supplied test file is used for final evaluation.
+`ids-train` fits a class-balanced Random Forest. Preprocessing is fit on training records, unknown test categories are supported, and unknown/missing labels are rejected instead of silently treated as attacks. The attack threshold is selected on a validation split from the training file. The supplied test file is used for evaluation.
 
 ```powershell
-ids-train --train data/KDDTrain+.txt --test data/KDDTest+.txt
+ids-train --train data/raw/KDDTrain+.txt --test data/raw/KDDTest+.txt
 ```
 
 The saved artifact contains the fitted pipeline and its attack threshold.
 
 ### Packet-observable flow model
 
-The packet adapter emits only fields it can measure or derive: duration, protocol, destination-port service, TCP-state summary, directional payload bytes, same-endpoint indicator, wrong-fragment count, and urgent-flag count. `ids-flow-train` trains and evaluates a separate model using precisely these fields. It selects a threshold on a split of KDDTrain+ to target a false-positive rate, then reports held-out KDDTest+ results.
+The packet adapter emits only fields it can measure or derive: duration, protocol, best-effort service port, TCP-state summary, directional bytes (packet length by default, payload length when supplied), same-endpoint indicator, wrong-fragment count, and urgent-flag count. `ids-flow-train` trains and evaluates a separate model using precisely these fields. It selects a threshold on a split of KDDTrain+ to target a false-positive rate, then reports KDDTest+ results.
 
 ```powershell
 ids-flow-train --train 'data/raw/KDDTrain+.txt' --test 'data/raw/KDDTest+.txt' --max-fpr 0.001
 ```
 
-This evaluates the reduced schema on NSL-KDD benchmark records. Threshold calibration targets a 0.1% false-positive rate on a training-only validation split; the held-out test rate can differ under distribution shift. See [RESULTS.md](RESULTS.md). NSL-KDD is not packet-capture data, so this is not live-traffic validation. Service and TCP-state fields are best-effort summaries from packet metadata.
+This evaluates the reduced schema on NSL-KDD benchmark records. Packet-adapter values and similarly named benchmark fields are not semantically identical, so this is a schema-proxy evaluation. The benchmark test set has already been used for threshold sensitivity analysis; published test metrics are descriptive, not an untouched final estimate. Use a fresh holdout or labeled capture for that. See [RESULTS.md](RESULTS.md). NSL-KDD is not packet-capture data, so this is not live-traffic validation.
 
 ### DDQN response policy
 
@@ -75,10 +75,10 @@ This evaluates the reduced schema on NSL-KDD benchmark records. Threshold calibr
 | Attack | -1.0 | 0.25 | 1.0 |
 
 ```powershell
-ids-ddqn --train data/KDDTrain+.txt --test data/KDDTest+.txt --steps 10000 --seed 42
+ids-ddqn --train data/raw/KDDTrain+.txt --test data/raw/KDDTest+.txt --steps 10000 --seed 42
 ```
 
-This is an **offline replay experiment**. NSL-KDD supplies labels for rewards, but it does not model how a response changes later traffic. The reported DDQN results therefore measure a learned per-record response policy, not long-term policy behavior or live-network effectiveness.
+This is an **offline contextual response experiment**. NSL-KDD supplies labels for immediate rewards, but it does not model how a response changes later traffic. Training therefore disables future-reward bootstrapping and learns per-record action values; these results do not measure long-term policy behavior or live-network effectiveness. The action-dependent simulator below is the project’s separate discounted DDQN experiment.
 
 ### Action-dependent simulator
 
@@ -101,7 +101,7 @@ Get-Content .\flow-events.jsonl -Wait | ids-monitor --model artifacts/ids_ddqn.j
 The monitor emits JSON recommendations and never creates firewall rules. Packet mode requires an `ids-flow-train` artifact and accepts JSONL events with `timestamp` (Unix seconds or ISO-8601), `src_ip`, `dst_ip`, `src_port`, `dst_port`, `protocol` (`tcp`, `udp`, `icmp`), and `packet_length`; optional fields are `payload_length`, `tcp_flags`, and `wrong_fragment`:
 
 ```powershell
-Get-Content .\packet-events.jsonl -Wait | ids-monitor --model artifacts/ids_flow.joblib --input-format packets --idle-timeout 5
+Get-Content .\packet-events.jsonl -Wait | ids-monitor --model artifacts/ids_flow.joblib --input-format packets --idle-timeout 5 --queue-size 1024
 ```
 
 Flows are grouped by bidirectional five-tuple and emitted after the idle timeout or at end of input. Packet mode emits only `allow` and `alert`; `ResponseAdapter` separates inference from response, and the built-in `RecommendationAdapter` does not modify the host.
@@ -114,16 +114,22 @@ Generate passwords with the operating system's cryptographic random source:
 password-generate --length 24 --count 3
 ```
 
-For a labeled password CSV, extract composition, repetition, diversity, and common-pattern features and train the baseline classifier. Both `password`/`strength` and `Password`/`Strength_Level` columns are accepted. For large files, `--sample-per-class` scans the input and retains a reproducible reservoir sample per label:
+For a labeled password CSV, extract composition, repetition, diversity, and common-pattern features and train the baseline classifier. Both `password`/`strength` and `Password`/`Strength_Level` columns are accepted. Passwords are loaded as text so leading zeroes are preserved. For large files, `--sample-per-class` scans the input and retains a reproducible reservoir sample per label:
 
 ```powershell
 password-eda data/raw/passwords.csv --sample-per-class 10000 --output data/processed/password_features.csv
 password-train data/processed/password_features.csv
 ```
 
-The exported feature table omits raw password strings. Do not commit source password datasets, generated secrets, or feature files derived from private data. For a reproducible public benchmark, PWLDS provides labels from five strength groups under CC BY 4.0; it is synthetically generated, so its results should not be generalized to real user passwords. See the [dataset card](https://github.com/Infinitode/PWLDS) and [download page](https://huggingface.co/datasets/InfinitodeLTD/PWLDS).
+The exported feature table omits raw password strings. The holdout groups identical feature vectors to reduce duplicate-pattern leakage. Do not commit source password datasets, generated secrets, or feature files derived from private data. For a reproducible public benchmark, PWLDS provides labels from five strength groups under CC BY 4.0; it is synthetically generated, so its results should not be generalized to real user passwords. See the [dataset card](https://github.com/Infinitode/PWLDS) and [download page](https://huggingface.co/datasets/InfinitodeLTD/PWLDS).
 
 Training writes held-out accuracy, macro F1, confusion matrix, and class metrics to `artifacts/password_strength_metrics.json` by default; use `--metrics-out` to choose another path.
+
+Predict passwords by piping one password per line to `password-predict`. Passwords are read from stdin instead of shell arguments and are not echoed or written to disk:
+
+```powershell
+Get-Content .\passwords-to-check.txt | password-predict --model artifacts/password_strength.joblib
+```
 
 ## Limitations
 

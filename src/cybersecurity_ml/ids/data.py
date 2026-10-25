@@ -20,17 +20,40 @@ CATEGORICAL_COLUMNS = ["protocol_type", "service", "flag"]
 
 
 def load_kdd(path: str | Path) -> pd.DataFrame:
-    """Load a headerless NSL-KDD text file."""
+    """Load and validate a headerless NSL-KDD text file."""
     data = pd.read_csv(path, header=None, names=KDD_COLUMNS, skipinitialspace=True)
     if data.empty:
         raise ValueError(f"Dataset is empty: {path}")
-    data["outcome"] = data["outcome"].astype(str).str.strip().str.rstrip(".")
+    if data.isna().any().any():
+        columns = data.columns[data.isna().any()].tolist()
+        raise ValueError(f"Dataset contains missing values in columns: {', '.join(columns)}")
+    data["outcome"] = data["outcome"].astype(str).str.strip().str.rstrip(".").str.lower()
+    known_labels = {"normal", *ATTACK_LABELS}
+    unknown = sorted(set(data["outcome"]) - known_labels)
+    if unknown:
+        raise ValueError(f"Unknown NSL-KDD outcome labels: {', '.join(unknown[:10])}")
     return data
+
+
+ATTACK_LABELS = {
+    "back", "land", "neptune", "pod", "smurf", "teardrop", "apache2", "udpstorm",
+    "processtable", "worm", "ipsweep", "nmap", "portsweep", "satan", "mscan", "saint",
+    "ftp_write", "guess_passwd", "imap", "multihop", "phf", "spy", "warezclient",
+    "warezmaster", "xlock", "xsnoop", "snmpguess", "snmpgetattack", "httptunnel",
+    "sendmail", "named", "mailbomb", "buffer_overflow", "loadmodule", "perl", "rootkit",
+    "ps", "sqlattack", "xterm",
+}
 
 
 def split_features_and_labels(data: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
     """Map normal traffic to 0 and every attack class to 1."""
-    labels = (data["outcome"].str.lower() != "normal").astype("int8")
+    if "outcome" not in data:
+        raise ValueError("Dataset is missing the outcome label column")
+    outcomes = data["outcome"].astype(str).str.strip().str.rstrip(".").str.lower()
+    unknown = sorted(set(outcomes) - {"normal", *ATTACK_LABELS})
+    if unknown:
+        raise ValueError(f"Unknown NSL-KDD outcome labels: {', '.join(unknown[:10])}")
+    labels = (outcomes != "normal").astype("int8")
     return data.drop(columns=["outcome", "difficulty"], errors="ignore"), labels
 
 

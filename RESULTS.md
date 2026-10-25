@@ -6,21 +6,21 @@
 - **Label mapping:** `normal` = 0; all attack labels = 1
 - **Runtime:** Python 3.13; scikit-learn 1.9.1; NumPy 2.5.4
 
-Both models used the official train/test files. The test set was reserved for final evaluation. The Random Forest attack threshold was selected on a stratified 20% validation split of the training file (seed 42). DDQN trained for 10,000 steps (seed 42) in the repository's offline replay environment.
+The Random Forest attack threshold was selected on a stratified 20% validation split of the training file (seed 42). The offline contextual DDQN policy trained for 10,000 steps (seed 42) using immediate labeled rewards and no bootstrapping across independent replay records. KDDTest+ was also used for threshold sensitivity analysis in the flow section; all reported KDDTest+ results are descriptive and are not an untouched final estimate for future model selection.
 
 ## Held-out comparison
 
 | Metric | Random Forest | DDQN policy |
 | --- | ---: | ---: |
-| Accuracy | 0.7995 | 0.7985 |
-| Macro F1 | 0.7993 | 0.7986 |
-| Attack precision | 0.9695 | 0.9218 |
-| Attack recall | 0.6689 | 0.7060 |
-| Attack F1 | 0.7916 | 0.7998 |
-| False positives (normal predicted as attack) | 270 | 769 |
-| False negatives (attack predicted as normal) | 4,249 | 3,771 |
+| Accuracy | 0.7995 | 0.7793 |
+| Macro F1 | 0.7993 | 0.7792 |
+| Attack precision | 0.9695 | 0.9222 |
+| Attack recall | 0.6689 | 0.6687 |
+| Attack F1 | 0.7916 | 0.7752 |
+| False positives (normal predicted as attack) | 270 | 724 |
+| False negatives (attack predicted as normal) | 4,249 | 4,252 |
 
-The DDQN policy catches more attacks on this split, with lower attack precision and more false alerts. Its macro F1 is essentially tied with the supervised baseline. This is a recall/false-alarm tradeoff, not a general win for reinforcement learning.
+On this run, DDQN has slightly fewer false detections but also slightly lower attack recall; its macro F1 trails the supervised baseline. This is a small operating-point tradeoff, not evidence that reinforcement learning is superior for the static labeled-record task.
 
 ### Confusion matrices
 
@@ -36,49 +36,49 @@ Rows are true labels and columns are predictions, ordered `[normal, attack]`.
 For DDQN, `alert` and `block` count as detected threats:
 
 ```text
-[[8942,  769],
- [3771, 9062]]
+[[8987,  724],
+ [4252, 8581]]
 ```
 
 ### DDQN response actions
 
 | True class | Allow | Alert | Block | Total |
 | --- | ---: | ---: | ---: | ---: |
-| Normal | 8,942 | 454 | 315 | 9,711 |
-| Attack | 3,771 | 927 | 8,135 | 12,833 |
-| **Total** | **12,713** | **1,381** | **8,450** | **22,544** |
+| Normal | 8,987 | 386 | 338 | 9,711 |
+| Attack | 4,252 | 243 | 8,338 | 12,833 |
+| **Total** | **13,239** | **629** | **8,676** | **22,544** |
 
-The policy blocked 315 normal test records. A live system must treat `block` as a potentially disruptive action and validate it against its own traffic and response controls before enforcement. Mean reward was `0.5815` under the reward table in the README; this value is specific to those chosen rewards and should not be compared across different reward schemes.
+The policy blocked 338 normal test records. A live system must treat `block` as a potentially disruptive action and validate it against its own traffic and response controls before enforcement. Mean reward was `0.5633` under the reward table in the README; this value is specific to those chosen rewards and should not be compared across different reward schemes.
 
 ## Reproduce
 
 Place the NSL-KDD files under `data/` and run from an environment where the project is installed:
 
 ```powershell
-ids-train --train data/KDDTrain+.txt --test data/KDDTest+.txt
-ids-ddqn --train data/KDDTrain+.txt --test data/KDDTest+.txt --steps 10000 --seed 42
+ids-train --train data/raw/KDDTrain+.txt --test data/raw/KDDTest+.txt
+ids-ddqn --train data/raw/KDDTrain+.txt --test data/raw/KDDTest+.txt --steps 10000 --seed 42
 ```
 
-Model artifacts are written under `artifacts/` and are intentionally ignored by Git. The trained artifacts used for this report were local evaluation outputs, not committed files.
+Model artifacts and metrics are written under `artifacts/` and are intentionally ignored by Git. The trained artifacts used for this report were local evaluation outputs, not committed files. The supervised IDS metrics are also persisted as `ids_random_forest_metrics.json` for reproducible machine-readable reporting.
 
 ## Password classifier
 
-The password pipeline now uses 11 features covering character classes, character diversity, Shannon entropy per character, class transitions, repeated runs, adjacent sequences, and common patterns. A reproducible reservoir sample of 10,000 examples per class was drawn from PWLDS v1.2 (50,000 rows total). The split was stratified, with 40,000 training and 10,000 held-out rows (seed 42).
+The password pipeline uses 11 features covering character classes, character diversity, Shannon entropy per character, class transitions, repeated runs, adjacent sequences, and common patterns. A reproducible reservoir sample of up to 10,000 examples per class was drawn from PWLDS v1.2 (50,000 rows total). An 80/20 grouped holdout keeps identical feature vectors in one partition. Because large duplicate groups cannot be split, this seed produced 40,803 training and 9,197 held-out rows.
 
 | Metric | Held-out result |
 | --- | ---: |
-| Accuracy | 0.9527 |
-| Macro F1 | 0.9527 |
-| Held-out rows | 10,000 |
+| Accuracy | 0.9338 |
+| Macro F1 | 0.9419 |
+| Held-out rows | 9,197 |
 
 Confusion matrix, true labels as rows and predicted labels as columns, classes `[0, 1, 2, 3, 4]`:
 
 ```text
-[[1997,    2,    1,    0,    0],
- [   6, 1880,   36,   78,    0],
- [   0,   14, 1890,   96,    0],
- [   0,   46,  194, 1760,    0],
- [   0,    0,    0,    0, 2000]]
+[[ 894,    1,    0,    0,    0],
+ [  14, 1826,   48,   97,    0],
+ [   0,   18, 2092,  166,    0],
+ [   0,   53,  212, 1821,    0],
+ [   0,    0,    0,    0, 1955]]
 ```
 
 This is a real held-out score on a **synthetic** dataset, not an estimate for real user-chosen passwords. PWLDS is licensed CC BY 4.0 and its documentation notes English-word and synthetic-generation biases. The score measures prediction of its labels from hand-engineered features, not password crackability. The feature export contains no raw password column.
@@ -117,7 +117,7 @@ The project now includes a separate synthetic threat-session environment where t
 
 | Policy | Mean reward per episode | Threat detection rate | False blocks per benign step |
 | --- | ---: | ---: | ---: |
-| DDQN | 31.1047 | 92.60% | 0.62% |
+| DDQN | 31.0833 | 92.51% | 0.64% |
 | Always allow | -21.7533 | 0.00% | 0.00% |
 | Always alert | -7.1083 | 100.00% | 0.00% |
 | Always block | -36.9113 | 100.00% | 100.00% |
@@ -127,5 +127,5 @@ Here, detection means choosing `alert` or `block` on a simulated malicious step.
 ## Interpretation and next work
 
 - The supervised model is a strong comparison point for static labeled records; reinforcement learning is not automatically better for this task.
-- The offline DDQN environment replays records and uses labels for immediate response rewards; its next observation is independent of the action. The synthetic simulator adds action-dependent transitions, but realistic costs, calibrated traffic dynamics, and repeated seed runs are still needed before drawing operational conclusions.
+- The offline DDQN environment replays records and uses labels for immediate response rewards. Its discount is zero so it does not bootstrap across unrelated observations; only the separate synthetic simulator has action-dependent transitions. Realistic costs, calibrated traffic dynamics, and repeated seed runs are still needed before drawing operational conclusions.
 - Do not tune further against `KDDTest+`; use training-only validation or a separate test set for future changes.

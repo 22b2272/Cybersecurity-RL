@@ -19,6 +19,7 @@ ids-simulate = "cybersecurity_ml.ids.simulate:main"
 password-generate = "cybersecurity_ml.passwords.generate:main"
 password-eda = "cybersecurity_ml.passwords.eda:main"
 password-train = "cybersecurity_ml.passwords.train_classifier:main"
+password-predict = "cybersecurity_ml.passwords.predict:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

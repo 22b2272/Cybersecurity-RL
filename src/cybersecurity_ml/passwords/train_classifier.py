@@ -7,7 +7,7 @@ import joblib
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, f1_score
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import GroupShuffleSplit
 
 FEATURE_COLUMNS = [
     "length", "uppercase", "lowercase", "digits", "special", "unique_ratio",
@@ -33,10 +33,19 @@ def train_classifier(
     counts = clean["strength"].value_counts()
     if counts.min() < 2:
         raise ValueError("Every strength class needs at least two rows for a stratified holdout")
-    x_train, x_test, y_train, y_test = train_test_split(
-        clean[FEATURE_COLUMNS], clean["strength"], test_size=0.2,
-        random_state=42, stratify=clean["strength"],
-    )
+    # Feature rows that are identical cannot be distinguished by this model.
+    # Keep them in one partition to avoid duplicate-feature leakage across the
+    # holdout; labels are checked so every class remains represented.
+    groups = pd.util.hash_pandas_object(clean[FEATURE_COLUMNS], index=False).to_numpy()
+    splitter = GroupShuffleSplit(n_splits=100, test_size=0.2, random_state=42)
+    split = next((indices for indices in splitter.split(clean, clean["strength"], groups)
+                  if clean["strength"].iloc[indices[0]].nunique() == clean["strength"].nunique()
+                  and clean["strength"].iloc[indices[1]].nunique() == clean["strength"].nunique()), None)
+    if split is None:
+        raise ValueError("Could not create a grouped holdout containing every class; provide more diverse rows")
+    train_indices, test_indices = split
+    x_train, x_test = clean[FEATURE_COLUMNS].iloc[train_indices], clean[FEATURE_COLUMNS].iloc[test_indices]
+    y_train, y_test = clean["strength"].iloc[train_indices], clean["strength"].iloc[test_indices]
     model = RandomForestClassifier(
         n_estimators=300, class_weight="balanced", min_samples_leaf=2,
         n_jobs=-1, random_state=42,
@@ -52,6 +61,7 @@ def train_classifier(
         "rows_total": int(len(clean)),
         "rows_train": int(len(x_train)),
         "rows_test": int(len(x_test)),
+        "split_strategy": "grouped 80/20 holdout by identical feature vectors",
         "features": FEATURE_COLUMNS,
         "classes": [str(label) for label in labels],
         "accuracy": float(accuracy_score(y_test, predictions)),

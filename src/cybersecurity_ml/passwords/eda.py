@@ -30,12 +30,15 @@ def build_feature_table(input_path: str | Path, sample_per_class: int | None = N
     columns = _column_map(header.columns)
     usecols = list(columns.values())
     if sample_per_class is None:
-        data = pd.read_csv(input_path, usecols=usecols, on_bad_lines="skip")
+        data = pd.read_csv(input_path, usecols=usecols, dtype={columns["password"]: "string"},
+                           on_bad_lines="skip")
         data = data.rename(columns={columns["password"]: "password", columns["strength"]: "strength"})
     else:
         rng = np.random.default_rng(seed)
         reservoirs: dict[object, list[tuple[float, str]]] = {}
-        for chunk in pd.read_csv(input_path, usecols=usecols, chunksize=chunksize, on_bad_lines="skip"):
+        for chunk in pd.read_csv(input_path, usecols=usecols,
+                                 dtype={columns["password"]: "string"},
+                                 chunksize=chunksize, on_bad_lines="skip"):
             chunk = chunk.rename(columns={columns["password"]: "password", columns["strength"]: "strength"})
             chunk = chunk.dropna(subset=["password", "strength"])
             priorities = rng.random(len(chunk))

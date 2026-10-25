@@ -35,6 +35,9 @@ def train_policy(
     environment = IDSResponseEnv(states, labels.to_numpy(), episode_steps=episode_steps, seed=seed)
     agent = DDQNAgent(
         state_size=states.shape[1],
+        # Replay rows are independent; bootstrapping into the next shuffled
+        # record would assign value to an unrelated, action-independent state.
+        gamma=0.0,
         batch_size=batch_size,
         memory_size=memory_size,
         seed=seed,
