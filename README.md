@@ -1,4 +1,4 @@
-# Cybersecurity ML Lab
+# Reinforcement Learning for Cybersecurity
 
 A research prototype for intrusion detection and password analysis. It includes a supervised IDS baseline, offline and synthetic DDQN policy experiments, a packet-summary flow adapter, and password utility scripts.
 
