@@ -9,7 +9,11 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, f1_score
 from sklearn.model_selection import train_test_split
 
-FEATURE_COLUMNS = ["length", "uppercase", "lowercase", "digits", "special"]
+FEATURE_COLUMNS = [
+    "length", "uppercase", "lowercase", "digits", "special", "unique_ratio",
+    "shannon_entropy_bits_per_char", "character_class_transitions", "max_repeated_run",
+    "sequential_adjacent_pairs", "common_pattern",
+]
 
 
 def train_classifier(

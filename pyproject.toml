@@ -12,6 +12,7 @@ dependencies = ["joblib>=1.3", "numpy>=1.24", "pandas>=2.0", "scikit-learn>=1.3"
 
 [project.scripts]
 ids-train = "cybersecurity_ml.ids.train:main"
+ids-flow-train = "cybersecurity_ml.ids.flow_train:main"
 ids-ddqn = "cybersecurity_ml.ids.rl_train:main"
 ids-monitor = "cybersecurity_ml.ids.monitor:main"
 ids-simulate = "cybersecurity_ml.ids.simulate:main"

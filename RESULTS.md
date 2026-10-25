@@ -63,7 +63,53 @@ Model artifacts are written under `artifacts/` and are intentionally ignored by 
 
 ## Password classifier
 
-No labeled password dataset was found in the project or checked data folders, so the password classifier has not been evaluated on real data. `password-train` now writes held-out JSON metrics (accuracy, macro F1, confusion matrix, and per-class report) when a labeled feature CSV is supplied. Synthetic smoke checks only verify that the pipeline executes; they are not password-model performance results.
+The password pipeline now uses 11 features covering character classes, character diversity, Shannon entropy per character, class transitions, repeated runs, adjacent sequences, and common patterns. A reproducible reservoir sample of 10,000 examples per class was drawn from PWLDS v1.2 (50,000 rows total). The split was stratified, with 40,000 training and 10,000 held-out rows (seed 42).
+
+| Metric | Held-out result |
+| --- | ---: |
+| Accuracy | 0.9527 |
+| Macro F1 | 0.9527 |
+| Held-out rows | 10,000 |
+
+Confusion matrix, true labels as rows and predicted labels as columns, classes `[0, 1, 2, 3, 4]`:
+
+```text
+[[1997,    2,    1,    0,    0],
+ [   6, 1880,   36,   78,    0],
+ [   0,   14, 1890,   96,    0],
+ [   0,   46,  194, 1760,    0],
+ [   0,    0,    0,    0, 2000]]
+```
+
+This is a real held-out score on a **synthetic** dataset, not an estimate for real user-chosen passwords. PWLDS is licensed CC BY 4.0 and its documentation notes English-word and synthetic-generation biases. The score measures prediction of its labels from hand-engineered features, not password crackability. The feature export contains no raw password column.
+
+To reproduce, download PWLDS from its [Hugging Face dataset page](https://huggingface.co/datasets/InfinitodeLTD/PWLDS) to `data/raw/pwlds_full.csv`, then run:
+
+```powershell
+password-eda data/raw/pwlds_full.csv --sample-per-class 10000 --output data/processed/pwlds_features.csv
+password-train data/processed/pwlds_features.csv --model-out artifacts/pwlds_password_model.joblib --metrics-out artifacts/pwlds_password_metrics.json
+```
+
+The run produced `artifacts/pwlds_password_metrics.json` locally; artifacts and datasets are ignored by Git.
+
+## Packet-observable IDS model
+
+Packet mode now uses a dedicated supervised model with exactly the nine fields emitted by the packet-summary flow adapter. The model calibrates its alert threshold on a stratified holdout from KDDTrain+, then evaluates on KDDTest+. Two training-validation targets were measured to show the false-positive/recall tradeoff:
+
+| Training validation FPR target | Threshold | KDDTest+ FPR | Attack recall | Accuracy | Macro F1 |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 1.0% | 0.247716 | 8.88% (862 false positives) | 84.39% | 87.29% | 0.8719 |
+| 0.1% | 0.946467 | 2.18% (212 false positives) | 54.13% | 72.95% | 0.7259 |
+
+The stricter target substantially reduced false alarms on KDDTest+, while missing more attacks. Neither validation target guarantees that same FPR on the test distribution; the gap shows a meaningful shift between the training holdout and KDDTest+. The stricter row is not a free improvement: it trades away attack recall.
+
+Reproduce the stricter setting with:
+
+```powershell
+ids-flow-train --train 'data/raw/KDDTrain+.txt' --test 'data/raw/KDDTest+.txt' --max-fpr 0.001
+```
+
+The evaluation is on NSL-KDD rows projected onto packet-observable fields, not on packet captures. It measures the compact schema on benchmark labels and does not establish live network performance. The held-out benchmark has been used for threshold sensitivity analysis; future threshold tuning needs a new untouched test split or labeled traffic capture.
 
 ## Action-dependent simulator
 

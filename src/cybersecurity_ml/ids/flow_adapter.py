@@ -1,18 +1,17 @@
-﻿"""Convert packet-summary JSONL telemetry into approximate NSL-KDD flow rows.
+"""Aggregate packet summaries into a compact, observable flow feature schema.
 
-The adapter can derive basic per-flow values from packet summaries. Host-window
-and application-layer features absent from telemetry are set to zero, so outputs
-are approximate and are not a substitute for a model trained on live-flow data.
+Packet summaries are aggregated into observable flow fields, without filling
+unavailable NSL-KDD fields with fabricated defaults.
 """
-from collections import defaultdict, deque
 from dataclasses import dataclass, field
 import time
 from datetime import datetime
 from typing import Any
 
-from cybersecurity_ml.ids.data import KDD_COLUMNS
-
-FEATURE_COLUMNS = [name for name in KDD_COLUMNS if name not in {"outcome", "difficulty"}]
+FEATURE_COLUMNS = [
+    "duration", "protocol_type", "service", "flag", "src_bytes", "dst_bytes",
+    "land", "wrong_fragment", "urgent",
+]
 SERVICE_BY_PORT = {
     20: "ftp_data", 21: "ftp", 22: "ssh", 23: "telnet", 25: "smtp",
     53: "domain", 80: "http", 110: "pop_3", 143: "imap4", 443: "http_443",
@@ -63,13 +62,10 @@ class _Flow:
     urgent: int = 0
     wrong_fragment: int = 0
     last_activity: float = field(default_factory=time.monotonic)
-    count: int = 1
-    srv_count: int = 1
-    dst_host_count: int = 1
 
 
-class KDDFlowFeatureAdapter:
-    """Aggregate bidirectional five-tuples and emit KDD-shaped feature records."""
+class PacketFlowFeatureAdapter:
+    """Aggregate bidirectional five-tuples into observable flow records."""
 
     def __init__(self, idle_timeout: float = 5.0) -> None:
         if idle_timeout <= 0:
@@ -77,8 +73,6 @@ class KDDFlowFeatureAdapter:
         self.idle_timeout = idle_timeout
         self.flows: dict[tuple, _Flow] = {}
         self.counter = 0
-        self.recent_connections: deque[tuple[float, str, int, str]] = deque()
-        self.destination_history: defaultdict[str, deque[float]] = defaultdict(lambda: deque(maxlen=100))
 
     def feed(self, packet: dict) -> list[dict]:
         required = {"timestamp", "src_ip", "dst_ip", "src_port", "dst_port", "protocol", "packet_length"}
@@ -97,15 +91,6 @@ class KDDFlowFeatureAdapter:
             self.counter += 1
             flow = _Flow(f"flow-{self.counter:06d}", src_ip, dst_ip, src_port, dst_port,
                          protocol, now, now)
-            while self.recent_connections and now - self.recent_connections[0][0] > 2.0:
-                self.recent_connections.popleft()
-            service = SERVICE_BY_PORT.get(dst_port, "private")
-            flow.count = 1 + sum(item[1] == dst_ip for item in self.recent_connections)
-            flow.srv_count = 1 + sum(item[1] == dst_ip and item[2] == dst_port for item in self.recent_connections)
-            self.recent_connections.append((now, dst_ip, dst_port, protocol))
-            destination_history = self.destination_history[dst_ip]
-            destination_history.append(now)
-            flow.dst_host_count = len(destination_history)
             self.flows[key] = flow
         flow.last_seen = now
         flow.last_activity = time.monotonic()
@@ -123,7 +108,6 @@ class KDDFlowFeatureAdapter:
         return completed
 
     def _to_features(self, flow: _Flow) -> dict:
-        values = {name: 0 for name in FEATURE_COLUMNS}
         protocol_name = {"tcp": "tcp", "udp": "udp", "icmp": "icmp"}.get(flow.protocol, "other")
         if protocol_name == "icmp":
             service = "eco_i"
@@ -137,7 +121,7 @@ class KDDFlowFeatureAdapter:
             flag = "SF"
         else:
             flag = "SF"
-        values.update({
+        values = {
             "duration": max(0.0, flow.last_seen - flow.first_seen),
             "protocol_type": protocol_name,
             "service": service,
@@ -147,10 +131,7 @@ class KDDFlowFeatureAdapter:
             "land": int(flow.src_ip == flow.dst_ip and flow.src_port == flow.dst_port),
             "wrong_fragment": flow.wrong_fragment,
             "urgent": flow.urgent,
-            "count": flow.count,
-            "srv_count": flow.srv_count,
-            "dst_host_count": flow.dst_host_count,
-        })
+        }
         return {"event_id": flow.flow_id, **values}
 
     def _expire(self, now: float) -> list[dict]:
@@ -169,3 +150,7 @@ class KDDFlowFeatureAdapter:
         expired = [key for key, flow in self.flows.items()
                    if now - flow.last_activity >= self.idle_timeout]
         return [self._to_features(self.flows.pop(key)) for key in expired]
+
+
+# Backwards-compatible name retained for earlier project scripts.
+KDDFlowFeatureAdapter = PacketFlowFeatureAdapter
